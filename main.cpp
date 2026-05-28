@@ -8,10 +8,14 @@
 #include <cstdio>
 #include <atomic>
 #include <csignal>
+#include <mutex>
+#include <thread>
 
 #include "utils.h"
 #include "db.h"
 
+
+std::mutex mutex;
 std::atomic<bool> running{true};
 static int g_server_socket = -1;
 
@@ -24,8 +28,49 @@ void signal_handler(int)
     }
 }
 
+void handleUser(int accept_socket, PostgreConnection& connection, std::mutex& mutex)
+{
+    constexpr size_t BUFFER_SIZE = 1024;
+    char buffer[BUFFER_SIZE] = {};
 
-int startServer(PGconn* conn)
+    while(true)
+    {
+        int bytes_recived = recv(accept_socket, buffer, sizeof(buffer) - 1, 0);
+        if(bytes_recived <= 0)
+        {
+            break;
+        }
+
+        buffer[bytes_recived] = '\0';
+
+        {
+            std::lock_guard<std::mutex> lock{mutex};
+            std::cout << "Received: " << buffer << '\n';
+        }
+        
+
+        if(auto id = connection.saveMessage(buffer))
+        {
+            std::lock_guard<std::mutex> lock{mutex};
+            std::cout << "Saved message: " << id.value() << '\n';
+        }
+        else
+        {
+            log_db_error("Failed to save message");
+        }
+
+        if(send(accept_socket, buffer, bytes_recived, 0) < 0)
+        {
+            log_error("Send socket");
+            return;
+        }
+    }
+    close(accept_socket);
+    
+}
+
+
+int startServer(PostgreConnection& connection)
 {
     const char* host = "127.0.0.1";
 
@@ -72,9 +117,6 @@ int startServer(PGconn* conn)
         return 1;
     }
 
-    constexpr size_t BUFFER_SIZE = 1024;
-    char buffer[BUFFER_SIZE] = {};
-
     while(true)
     {
         int accept_socket = accept(g_server_socket, NULL, NULL);
@@ -91,42 +133,9 @@ int startServer(PGconn* conn)
             continue;
         }
 
-        while(true)
-        {
-            int bytes_recived = recv(accept_socket, buffer, sizeof(buffer) - 1, 0);
-            if(bytes_recived <= 0)
-            {
-                break;
-            }
-            buffer[bytes_recived] = '\0';
-            std::cout << "Received: " << buffer << '\n';
+        std::thread j{handleUser, accept_socket, std::ref(connection), std::ref(mutex)};
 
-            const char* param_values[1] = { buffer };
-
-            PGresult* res = PQexecParams(
-                conn,
-                "INSERT INTO messages (content) VALUES ($1)",
-                1,
-                NULL,
-                param_values,
-                NULL,
-                NULL,
-                0
-            );
-            if(PQresultStatus(res) != PGRES_COMMAND_OK)
-            {
-                log_error(PQerrorMessage(conn));
-            }
-            PQclear(res);
-
-            if(send(accept_socket, buffer, bytes_recived, 0) < 0)
-            {
-                log_error("Send socket");
-                break;
-            }
-        }
-        close(accept_socket);
-
+        j.detach();
     }
     
     close(g_server_socket);
@@ -149,7 +158,7 @@ int main()
         return 1;
     }
 
-    startServer(p_connection.getConnection());
+    startServer(p_connection);
 
     std::cerr << "Server closed.\n";
 
