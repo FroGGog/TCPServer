@@ -5,3 +5,4 @@
 /.clangd
 /lib
 .DS_Store
+*.sh

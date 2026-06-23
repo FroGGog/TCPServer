@@ -73,10 +73,11 @@ void handleUser(int accept_socket, PostgreConnection& connection, std::mutex& mu
 int startServer(PostgreConnection& connection)
 {
     const char* host = "127.0.0.1";
+    int PORT = 4124;
 
     sockaddr_in server_param = {};
     server_param.sin_family = AF_INET;
-    server_param.sin_port = htons(4124);
+    server_param.sin_port = htons(PORT);
     int res = inet_pton(AF_INET, host, &server_param.sin_addr);
     if(res == 0)
     {
@@ -117,6 +118,8 @@ int startServer(PostgreConnection& connection)
         return 1;
     }
 
+    log(std::string{"Started server on port " + std::to_string(PORT)}.c_str());
+
     while(true)
     {
         int accept_socket = accept(g_server_socket, NULL, NULL);
@@ -133,6 +136,7 @@ int startServer(PostgreConnection& connection)
             continue;
         }
 
+        log(std::string{ "Connected " + std::to_string(accept_socket)}.c_str());
         std::thread j{handleUser, accept_socket, std::ref(connection), std::ref(mutex)};
 
         j.detach();
@@ -160,7 +164,8 @@ int main()
 
     startServer(p_connection);
 
-    std::cerr << "Server closed.\n";
+
+    log_error("Server closed.");
 
     return 0;
 }
