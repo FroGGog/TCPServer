@@ -14,6 +14,9 @@
 #include "utils.h"
 #include "db.h"
 
+#include "nlohmann/json.hpp"
+
+using json = nlohmann::json;
 
 std::mutex mutex;
 std::atomic<bool> running{true};
@@ -43,26 +46,69 @@ void handleUser(int accept_socket, PostgreConnection& connection, std::mutex& mu
 
         buffer[bytes_recived] = '\0';
 
+        try
         {
-            std::lock_guard<std::mutex> lock{mutex};
-            std::cout << "Received: " << buffer << '\n';
-        }
-        
+            json request = json::parse(buffer);
 
-        if(auto id = connection.saveMessage(buffer))
-        {
-            std::lock_guard<std::mutex> lock{mutex};
-            std::cout << "Saved message: " << id.value() << '\n';
-        }
-        else
-        {
-            log_db_error("Failed to save message");
-        }
+            if(request.contains("action") && request["action"] == "save")
+            {
+                std::string value = request["value"].get<std::string>();
+                
+                if(auto id = connection.saveMessage(value.c_str()))
+                {
+                    json response = {{"id", *id}};
+                    std::string response_str = response.dump();
+                    if(send(accept_socket, response_str.c_str(), response_str.size(), 0) < 0)
+                    {
+                        std::lock_guard<std::mutex> lock{mutex};
+                        log_error("Failed to send saved message id");
+                        return;
+                    }
+                    std::lock_guard<std::mutex> lock{mutex};
+                    log(std::string{"Saved message with id: " + std::to_string(id.value())}.c_str());
+                }
+                else
+                {
+                    json response = {{"error", "db_insert_failed"}};
+                    std::string response_str = response.dump();
+                    if(send(accept_socket, response_str.c_str(), response_str.size(), 0) < 0)
+                    {
+                        std::lock_guard<std::mutex> lock{mutex};
+                        log_error("Failed to send error message");
+                        return;
+                    }
+                    std::lock_guard<std::mutex> lock{mutex};
+                    log_db_error("Failed to save message");
+                }
+            }
+            else
+            {
+                json response = {{"error", "unknown_action"}};
+                std::string response_str = response.dump();
+                std::lock_guard<std::mutex> lock{mutex};
+                log_error("Unknown action");
 
-        if(send(accept_socket, buffer, bytes_recived, 0) < 0)
+                if(send(accept_socket, response_str.c_str(), response_str.length(), 0) < 0)
+                {
+                    std::lock_guard<std::mutex> lock{mutex};
+                    log_error("Failed to send error response");
+                    return;
+                }
+                return;
+            }
+        }
+        catch (const json::exception& e)
         {
-            log_error("Send socket");
-            return;
+            log_error("JSON PARSE");
+            json response = {{"error", "invalid_json"}};
+
+            std::string response_str = response.dump();
+            if(send(accept_socket, response_str.c_str(), response_str.length(), 0) < 0)
+            {
+                std::lock_guard<std::mutex> lock{mutex};
+                log_error("Failed to send error response");
+                return;
+            }
         }
     }
     close(accept_socket);
