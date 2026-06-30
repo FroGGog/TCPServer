@@ -37,10 +37,30 @@ set(SOURCES
 # Создание исполняемого файла
 add_executable(${PROJECT_NAME} ${SOURCES})
 
+include(FetchContent)
+
+# nlohmann/json (header-only, версия 3.11.3)
+FetchContent_Declare(
+  nlohmann_json
+  GIT_REPOSITORY https://github.com/nlohmann/json.git
+  GIT_TAG        v3.11.3
+  GIT_SHALLOW    TRUE
+)
+
+FetchContent_Declare(
+  spdlog
+  GIT_REPOSITORY https://github.com/gabime/spdlog.git
+  GIT_TAG        v1.16.0
+  GIT_SHALLOW    TRUE
+)
+
 list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew/opt/libpq")
-find_package(nlohmann_json 3.2.0 REQUIRED)
 find_package(PostgreSQL REQUIRED)
-find_package(spdlog CONFIG REQUIRED)
+
+set(JSON_BuildTests OFF CACHE INTERNAL "")
+set(SPDLOG_BUILD_TESTS OFF CACHE INTERNAL "")
+
+FetchContent_MakeAvailable(nlohmann_json spdlog)
 
 target_include_directories(${PROJECT_NAME} PRIVATE ${PostgreSQL_INCLUDE_DIRS})
 target_link_libraries(${PROJECT_NAME} PRIVATE nlohmann_json::nlohmann_json)

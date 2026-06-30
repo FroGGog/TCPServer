@@ -10,6 +10,7 @@
 #include <csignal>
 #include <mutex>
 #include <thread>
+#include <chrono>
 
 #include "db.h"
 
@@ -18,7 +19,23 @@
 using json = nlohmann::json;
 
 std::atomic<bool> running{true};
+std::atomic<int> active_clients{0};
 static int g_server_socket = -1;
+
+struct ClientCounterGuard
+{
+    std::atomic<int>& counter;
+
+    explicit ClientCounterGuard(std::atomic<int>& c)
+        : counter(c)
+    {
+        ++counter;
+    }
+    ~ClientCounterGuard()
+    {
+        --counter;
+    }
+};
 
 void signal_handler(int)
 {
@@ -31,6 +48,7 @@ void signal_handler(int)
 
 void handleUser(int accept_socket, PostgreConnection& connection)
 {
+    ClientCounterGuard guard{active_clients};
     constexpr size_t BUFFER_SIZE = 1024;
     char buffer[BUFFER_SIZE] = {};
 
@@ -104,7 +122,6 @@ void handleUser(int accept_socket, PostgreConnection& connection)
         }
     }
     close(accept_socket);
-    
 }
 
 
@@ -213,6 +230,14 @@ int main()
     }
 
     startServer(p_connection);
+
+    spdlog::info("Shutting down... {} active clients", active_clients.load());
+    int wait_cycles = 0;
+    while (active_clients.load() > 0 && wait_cycles < 30)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        ++wait_cycles;
+    }
 
     spdlog::info("Server closed");
 

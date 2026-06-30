@@ -3,9 +3,13 @@
 PostgreConnection::PostgreConnection()
 {
     try {
-        logger = spdlog::rotating_logger_mt("db_logger", "logs/db_server.log", 1024 * 1024, 3);
 
-        logger->flush_on(spdlog::level::info);
+        logger = spdlog::get("db_logger");
+        if(!logger)
+        {
+            logger = spdlog::rotating_logger_mt("db_logger", "logs/db_server.log", 1024 * 1024, 3);
+            logger->flush_on(spdlog::level::info);
+        }
         
     } catch (const spdlog::spdlog_ex& ex) {
         std::cerr << "Log init failed: " << ex.what() << "\n";
