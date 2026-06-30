@@ -40,10 +40,12 @@ add_executable(${PROJECT_NAME} ${SOURCES})
 list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew/opt/libpq")
 find_package(nlohmann_json 3.2.0 REQUIRED)
 find_package(PostgreSQL REQUIRED)
+find_package(spdlog CONFIG REQUIRED)
 
 target_include_directories(${PROJECT_NAME} PRIVATE ${PostgreSQL_INCLUDE_DIRS})
 target_link_libraries(${PROJECT_NAME} PRIVATE nlohmann_json::nlohmann_json)
 target_link_libraries(${PROJECT_NAME} PRIVATE ${PostgreSQL_LIBRARIES})
+target_link_libraries(${PROJECT_NAME} PRIVATE spdlog::spdlog)
 
 # Для macOS: фреймворки
 if(APPLE)

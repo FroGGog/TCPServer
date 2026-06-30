@@ -11,14 +11,12 @@
 #include <mutex>
 #include <thread>
 
-#include "utils.h"
 #include "db.h"
 
 #include "nlohmann/json.hpp"
 
 using json = nlohmann::json;
 
-std::mutex mutex;
 std::atomic<bool> running{true};
 static int g_server_socket = -1;
 
@@ -31,7 +29,7 @@ void signal_handler(int)
     }
 }
 
-void handleUser(int accept_socket, PostgreConnection& connection, std::mutex& mutex)
+void handleUser(int accept_socket, PostgreConnection& connection)
 {
     constexpr size_t BUFFER_SIZE = 1024;
     char buffer[BUFFER_SIZE] = {};
@@ -59,13 +57,11 @@ void handleUser(int accept_socket, PostgreConnection& connection, std::mutex& mu
                     json response = {{"id", *id}};
                     std::string response_str = response.dump();
                     if(send(accept_socket, response_str.c_str(), response_str.size(), 0) < 0)
-                    {
-                        std::lock_guard<std::mutex> lock{mutex};
-                        log_error("Failed to send saved message id");
+                    {                        
+                        spdlog::error("Send failed: {}", accept_socket);
                         return;
                     }
-                    std::lock_guard<std::mutex> lock{mutex};
-                    log(std::string{"Saved message with id: " + std::to_string(id.value())}.c_str());
+                    spdlog::info("Saved message with id: {}", id.value());
                 }
                 else
                 {
@@ -73,25 +69,22 @@ void handleUser(int accept_socket, PostgreConnection& connection, std::mutex& mu
                     std::string response_str = response.dump();
                     if(send(accept_socket, response_str.c_str(), response_str.size(), 0) < 0)
                     {
-                        std::lock_guard<std::mutex> lock{mutex};
-                        log_error("Failed to send error message");
+                        spdlog::error("Send failed: {}", accept_socket);                    
                         return;
                     }
-                    std::lock_guard<std::mutex> lock{mutex};
-                    log_db_error("Failed to save message");
+
+                    spdlog::error("Saving message failed");
                 }
             }
             else
             {
                 json response = {{"error", "unknown_action"}};
-                std::string response_str = response.dump();
-                std::lock_guard<std::mutex> lock{mutex};
-                log_error("Unknown action");
+                std::string response_str = response.dump();                
+                spdlog::error("Unknow action: {}", response_str);
 
                 if(send(accept_socket, response_str.c_str(), response_str.length(), 0) < 0)
                 {
-                    std::lock_guard<std::mutex> lock{mutex};
-                    log_error("Failed to send error response");
+                    spdlog::error("Send error response failed");
                     return;
                 }
                 return;
@@ -99,14 +92,13 @@ void handleUser(int accept_socket, PostgreConnection& connection, std::mutex& mu
         }
         catch (const json::exception& e)
         {
-            log_error("JSON PARSE");
-            json response = {{"error", "invalid_json"}};
+            spdlog::error("Json parse failure");
 
+            json response = {{"error", "invalid_json"}};
             std::string response_str = response.dump();
             if(send(accept_socket, response_str.c_str(), response_str.length(), 0) < 0)
             {
-                std::lock_guard<std::mutex> lock{mutex};
-                log_error("Failed to send error response");
+                spdlog::error("Send error response failed");
                 return;
             }
         }
@@ -127,26 +119,26 @@ int startServer(PostgreConnection& connection)
     int res = inet_pton(AF_INET, host, &server_param.sin_addr);
     if(res == 0)
     {
-        log_error("Invalid IP format");
+        spdlog::error("Server invalid IP format {}", res);
         return 1;
     }
     if(res < 0)
     {
-        log_error("Inter_pton invalid argument");
+        spdlog::error("Invalid inet_pton invalid argument {}", res);
         return 1;
     }
 
     g_server_socket = socket(server_param.sin_family, SOCK_STREAM, 0);
     if(g_server_socket < 0)
     {
-        log_error("Socket creation");
+        spdlog::error("Socket creation failure: {}", g_server_socket);
         return 1;
     }
 
     int opt = 1;
     if (setsockopt(g_server_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) 
     {
-        log_error("setsockopt");
+        spdlog::error("Setsockopt erro");        
         close(g_server_socket);
         return 1;
     }
@@ -154,17 +146,17 @@ int startServer(PostgreConnection& connection)
 
     if(bind(g_server_socket, (sockaddr*)&server_param, sizeof(server_param)) < 0)
     {
-        log_error("socket binding");
+        spdlog::error("Server socket binding failure"); 
         return 1;
     }
 
     if(listen(g_server_socket, 1) < 0)
     {
-        log_error("socket listen");
+        spdlog::error("Listening to server socket failure");
         return 1;
     }
 
-    log(std::string{"Started server on port " + std::to_string(PORT)}.c_str());
+    spdlog::info("Started server on port {}", PORT);
 
     while(true)
     {
@@ -178,12 +170,12 @@ int startServer(PostgreConnection& connection)
                     break;
                 }
             }
-            log_error("Accept socket");
+            spdlog::error("Accept socket failure: {}", accept_socket);
             continue;
         }
-
-        log(std::string{ "Connected " + std::to_string(accept_socket)}.c_str());
-        std::thread j{handleUser, accept_socket, std::ref(connection), std::ref(mutex)};
+        
+        spdlog::info("Connected: {}", accept_socket);
+        std::thread j{handleUser, accept_socket, std::ref(connection)};
 
         j.detach();
     }
@@ -196,6 +188,18 @@ int startServer(PostgreConnection& connection)
 
 int main()
 {
+    try {
+        auto logger = spdlog::rotating_logger_mt("server", "logs/server.log", 1024 * 1024, 3);
+
+        logger->flush_on(spdlog::level::info);
+
+        spdlog::set_default_logger(logger);
+
+    } catch (const spdlog::spdlog_ex& ex) {
+        std::cerr << "Log init failed: " << ex.what() << "\n";
+        return 1;
+    }
+
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
     signal(SIGPIPE, SIG_IGN);
@@ -204,14 +208,13 @@ int main()
 
     if(!p_connection.isConnected())
     {
-        log_error("DB connection failed.");
+        spdlog::error("DB connection failure");
         return 1;
     }
 
     startServer(p_connection);
 
-
-    log_error("Server closed.");
+    spdlog::info("Server closed");
 
     return 0;
 }
