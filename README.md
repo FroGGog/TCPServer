@@ -1,13 +1,17 @@
 # TCPServer: Echo Service with PostgreSQL
 
-Простой однопоточный TCP-echo сервер на C++ (POSIX sockets), сохраняющий входящие сообщения в PostgreSQL.
+Простой многопоточный TCP-echo сервер на C++ (POSIX sockets), сохраняющий входящие сообщения (получаемые в json формате) в PostgreSQL.
 
 ## Требования
 - macOS / Linux
 - CMake >= 3.26
 - Clang / GCC с поддержкой C++17
 - PostgreSQL 15+ (локально или в Docker)
-- `libpq` (`brew install libpq` на macOS)
+
+## Автоматические зависимости
+Cmake автоматические подтягивает 
+- nlohmann/json
+- spdlog
 
 ## Сборка
 ```bash
@@ -40,9 +44,16 @@ CREATE TABLE IF NOT EXISTS messages (
 nc 127.0.0.1 4124
 # или 
 telnet 127.0.0.1 4124
-Hello World
-# Сервер вернёт: Hello World
+{"action" : "save", "value" : "Your text"}
+# Сервер вернёт: {"id" : id}
 ```
+
+## Использование
+На данный момент сервер принимает только сообщения формата: 
+- {"action" : "save", "value" : "Your text"}
+
+Доступные "action":
+- save - принимает один аргумент "value" - текст сообщения std::string
 
 ## Остановка
 Нажмите Ctrl+C. Сервер корректно закроет сокеты и соединение с БД.

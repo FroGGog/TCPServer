@@ -39,7 +39,6 @@ add_executable(${PROJECT_NAME} ${SOURCES})
 
 include(FetchContent)
 
-# nlohmann/json (header-only, версия 3.11.3)
 FetchContent_Declare(
   nlohmann_json
   GIT_REPOSITORY https://github.com/nlohmann/json.git
