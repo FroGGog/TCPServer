@@ -82,7 +82,13 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
     ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
 )
 
+set(COPY_FILES
+    "${CMAKE_SOURCE_DIR}/config.json"
+)
 
-# Печать информации о конфигурации
-message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+add_custom_command(TARGET TCPServer POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy ${COPY_FILES} $<TARGET_FILE_DIR:TCPServer>/
+    COMMENT "Copying files to output directory"
+)
+
 message(STATUS "C++ Standard: ${CMAKE_CXX_STANDARD}")

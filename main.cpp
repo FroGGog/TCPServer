@@ -11,8 +11,10 @@
 #include <mutex>
 #include <thread>
 #include <chrono>
+#include <fstream>
 
 #include "db.h"
+#include "utils.h"
 
 #include "nlohmann/json.hpp"
 
@@ -21,6 +23,9 @@ using json = nlohmann::json;
 std::atomic<bool> running{true};
 std::atomic<int> active_clients{0};
 static int g_server_socket = -1;
+
+ServerData DATA;
+
 
 struct ClientCounterGuard
 {
@@ -110,7 +115,7 @@ void handleUser(int accept_socket, PostgreConnection& connection)
         }
         catch (const json::exception& e)
         {
-            spdlog::error("Json parse failure");
+            spdlog::error("Json parse failure: {}", e.what());
 
             json response = {{"error", "invalid_json"}};
             std::string response_str = response.dump();
@@ -127,8 +132,8 @@ void handleUser(int accept_socket, PostgreConnection& connection)
 
 int startServer(PostgreConnection& connection)
 {
-    const char* host = "127.0.0.1";
-    int PORT = 4124;
+    const char* host = DATA.host.c_str();
+    int PORT = DATA.server_port;
 
     sockaddr_in server_param = {};
     server_param.sin_family = AF_INET;
@@ -155,7 +160,7 @@ int startServer(PostgreConnection& connection)
     int opt = 1;
     if (setsockopt(g_server_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) 
     {
-        spdlog::error("Setsockopt erro");        
+        spdlog::error("Setsockopt error");        
         close(g_server_socket);
         return 1;
     }
@@ -205,6 +210,7 @@ int startServer(PostgreConnection& connection)
 
 int main()
 {
+
     try {
         auto logger = spdlog::rotating_logger_mt("server", "logs/server.log", 1024 * 1024, 3);
 
@@ -217,11 +223,38 @@ int main()
         return 1;
     }
 
+    try
+    {
+        std::fstream fs;
+        fs.open("bin/config.json", std::ios::in);
+        if(!fs.is_open())
+        {
+            spdlog::error("Failed to open config.json");
+            return 1;
+        }
+
+        json config = json::parse(fs);
+
+        DATA.host = config.value("host", "127.0.0.1");
+        DATA.server_port = config.value("server_port", 4124);
+
+        DATA.db_port = config.value("db_port", 5432);
+        DATA.db_name = config.value("db_name", "TCPServer");
+        DATA.db_username = config.value("user", "postgres");
+        DATA.db_password = config.value("password", "123");
+    }
+    catch (json::exception& e)
+    {
+        spdlog::error("Json config parse failure: {}", e.what());
+        return 1;
+    }
+
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
     signal(SIGPIPE, SIG_IGN);
 
-    PostgreConnection p_connection;
+    PostgreConnection p_connection {DATA.host, std::to_string(DATA.db_port), 
+            DATA.db_name, DATA.db_username, DATA.db_password};
 
     if(!p_connection.isConnected())
     {

@@ -1,6 +1,7 @@
 #include "db.h"
 
-PostgreConnection::PostgreConnection()
+PostgreConnection::PostgreConnection(std::string host, std::string port, std::string dbname, 
+        std::string username, std::string password)
 {
     try {
 
@@ -15,12 +16,14 @@ PostgreConnection::PostgreConnection()
         std::cerr << "Log init failed: " << ex.what() << "\n";
     }   
 
-    const char* conninfo = 
-        "host=127.0.0.1 "
-        "port=5432 "
-        "dbname=TCPServer "
-        "user=postgres "
-        "password=123";
+    std::string str_conninfo =
+        "host=" + host + ' ' +
+        "port=" + port + ' ' +
+        "dbname=" + dbname + ' ' +
+        "user=" + username + ' ' +
+        "password=" + password;
+
+    const char* conninfo = str_conninfo.c_str();
 
     m_conn = PQconnectdb(conninfo);
     if(PQstatus(m_conn) != CONNECTION_OK)

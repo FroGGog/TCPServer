@@ -11,7 +11,8 @@
 class PostgreConnection
 {
 public:
-    PostgreConnection();
+    PostgreConnection(std::string host, std::string port, std::string dbname, 
+        std::string username, std::string password);
     ~PostgreConnection();
 
     bool isConnected() const;
