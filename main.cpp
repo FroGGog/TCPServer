@@ -12,6 +12,7 @@
 #include <thread>
 #include <chrono>
 #include <fstream>
+#include <queue>
 
 #include "db.h"
 #include "utils.h"
@@ -24,8 +25,103 @@ std::atomic<bool> running{true};
 std::atomic<int> active_clients{0};
 static int g_server_socket = -1;
 
-ServerData DATA;
+Config CONFIG;
 
+class ConnectionPool
+{
+public:
+    ConnectionPool(const Config& cfg, size_t pool_size)
+    {
+        m_pool.reserve(pool_size);
+
+        for(size_t i = 0; i < pool_size; ++i)
+        {
+            PostgreConnection p_connection {cfg.host, std::to_string(cfg.db_port), 
+            cfg.db_name, cfg.db_username, cfg.db_password};
+
+            if(!p_connection.isConnected())
+            {
+                spdlog::error("Failed to create connection #{}", i);
+                throw std::runtime_error("Database connection failed");
+            }
+
+            m_pool.push_back(std::move(p_connection));
+            m_free_indices.push(i);
+        }
+        spdlog::info("Connection pool created with {} connections", pool_size);
+    }
+
+    size_t acquire()
+    {
+        std::unique_lock<std::mutex> lock(m_mtx);
+
+        m_cv.wait(lock, [this]{return !m_free_indices.empty();});
+
+        size_t index = m_free_indices.front();
+        m_free_indices.pop();
+
+        auto& conn = m_pool[index];
+        if (PQstatus(conn.getConnection()) != CONNECTION_OK) {
+            spdlog::warn("Connection #{} is dead, attempting reset...", index);
+            PQreset(conn.getConnection());
+        }
+        return index;
+    }
+
+    void release(size_t con_index)
+    {
+        std::lock_guard<std::mutex> lock(m_mtx);
+        m_free_indices.push(con_index);
+        m_cv.notify_one();
+    }
+
+    PostgreConnection& getConnection(size_t index)
+    {
+        return m_pool[index];
+    }
+
+
+private:
+    std::vector<PostgreConnection> m_pool;
+    std::queue<size_t> m_free_indices;
+    std::mutex m_mtx;
+    std::condition_variable m_cv;
+
+};
+
+class ConnectionGuard
+{
+public:
+    ConnectionGuard(ConnectionPool& pool, size_t idx)
+        : m_pool(pool), m_idx(idx) {}    
+        
+    ~ConnectionGuard()
+    {
+        if(!m_released)
+        {
+            m_pool.release(m_idx);
+        }
+    }
+
+    ConnectionGuard(const ConnectionGuard&) = delete;
+    ConnectionGuard& operator=(const ConnectionGuard&) = delete;
+
+    ConnectionGuard(ConnectionGuard&& other) noexcept
+        : m_pool(other.m_pool), m_idx(other.m_idx), m_released(other.m_released)
+    {
+        other.m_released = true;
+    }
+
+    PostgreConnection& get()
+    {
+        return m_pool.getConnection(m_idx);
+    }
+
+private:
+    ConnectionPool& m_pool;
+    size_t m_idx = 0;
+    bool m_released = false;
+};
 
 struct ClientCounterGuard
 {
@@ -51,7 +147,7 @@ void signal_handler(int)
     }
 }
 
-void handleUser(int accept_socket, PostgreConnection& connection)
+void handleUser(int accept_socket, ConnectionPool& pool)
 {
     ClientCounterGuard guard{active_clients};
     constexpr size_t BUFFER_SIZE = 1024;
@@ -75,6 +171,9 @@ void handleUser(int accept_socket, PostgreConnection& connection)
             {
                 std::string value = request["value"].get<std::string>();
                 
+                auto conn_guard = ConnectionGuard{pool, pool.acquire()};
+                auto& connection = conn_guard.get();
+
                 if(auto id = connection.saveMessage(value.c_str()))
                 {
                     json response = {{"id", *id}};
@@ -130,10 +229,10 @@ void handleUser(int accept_socket, PostgreConnection& connection)
 }
 
 
-int startServer(PostgreConnection& connection)
+int startServer(ConnectionPool& pool)
 {
-    const char* host = DATA.host.c_str();
-    int PORT = DATA.server_port;
+    const char* host = CONFIG.host.c_str();
+    int PORT = CONFIG.server_port;
 
     sockaddr_in server_param = {};
     server_param.sin_family = AF_INET;
@@ -160,7 +259,7 @@ int startServer(PostgreConnection& connection)
     int opt = 1;
     if (setsockopt(g_server_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) 
     {
-        spdlog::error("Setsockopt error");        
+        spdlog::error("Setsockopt error");
         close(g_server_socket);
         return 1;
     }
@@ -172,7 +271,7 @@ int startServer(PostgreConnection& connection)
         return 1;
     }
 
-    if(listen(g_server_socket, 1) < 0)
+    if(listen(g_server_socket, 128) < 0)
     {
         spdlog::error("Listening to server socket failure");
         return 1;
@@ -197,7 +296,7 @@ int startServer(PostgreConnection& connection)
         }
         
         spdlog::info("Connected: {}", accept_socket);
-        std::thread j{handleUser, accept_socket, std::ref(connection)};
+        std::thread j{handleUser, accept_socket, std::ref(pool)};
 
         j.detach();
     }
@@ -235,13 +334,13 @@ int main()
 
         json config = json::parse(fs);
 
-        DATA.host = config.value("host", "127.0.0.1");
-        DATA.server_port = config.value("server_port", 4124);
+        CONFIG.host = config.value("host", "127.0.0.1");
+        CONFIG.server_port = config.value("server_port", 4124);
 
-        DATA.db_port = config.value("db_port", 5432);
-        DATA.db_name = config.value("db_name", "TCPServer");
-        DATA.db_username = config.value("user", "postgres");
-        DATA.db_password = config.value("password", "123");
+        CONFIG.db_port = config.value("db_port", 5432);
+        CONFIG.db_name = config.value("db_name", "TCPServer");
+        CONFIG.db_username = config.value("user", "postgres");
+        CONFIG.db_password = config.value("password", "123");
     }
     catch (json::exception& e)
     {
@@ -253,16 +352,9 @@ int main()
     signal(SIGTERM, signal_handler);
     signal(SIGPIPE, SIG_IGN);
 
-    PostgreConnection p_connection {DATA.host, std::to_string(DATA.db_port), 
-            DATA.db_name, DATA.db_username, DATA.db_password};
+    ConnectionPool p_connections{CONFIG, 5};
 
-    if(!p_connection.isConnected())
-    {
-        spdlog::error("DB connection failure");
-        return 1;
-    }
-
-    startServer(p_connection);
+    startServer(p_connections);
 
     spdlog::info("Shutting down... {} active clients", active_clients.load());
     int wait_cycles = 0;

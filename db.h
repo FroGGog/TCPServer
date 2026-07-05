@@ -15,6 +15,10 @@ public:
         std::string username, std::string password);
     ~PostgreConnection();
 
+    PostgreConnection(const PostgreConnection& other) = delete;
+
+    PostgreConnection(PostgreConnection&& other);
+
     bool isConnected() const;
     PGconn* getConnection();
     
@@ -26,7 +30,4 @@ private:
     PGconn* m_conn = nullptr;
 
     std::shared_ptr<spdlog::logger> logger;
-
-    std::mutex db_mutex;
-
 };

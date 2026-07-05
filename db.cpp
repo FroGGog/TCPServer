@@ -42,7 +42,19 @@ PostgreConnection::PostgreConnection(std::string host, std::string port, std::st
 PostgreConnection::~PostgreConnection()
 {
     PQfinish(m_conn);
-    logger->info("DB connection closed");
+    m_conn = nullptr;
+    if(logger)
+    {
+        logger->info("DB connection closed");
+    }
+}
+
+PostgreConnection::PostgreConnection(PostgreConnection&& other)
+{
+    m_conn = std::exchange(other.m_conn, nullptr);
+    m_is_connected = std::exchange(other.m_is_connected, false);
+
+    logger = std::move(other.logger);
 }
 
 bool PostgreConnection::isConnected() const
@@ -57,7 +69,6 @@ PGconn* PostgreConnection::getConnection()
 
 std::optional<int64_t> PostgreConnection::saveMessage(const char* buffer)
 {
-    std::lock_guard<std::mutex> lock(db_mutex);
     const char* param_values[1] = { buffer };
 
     PGresult* res = PQexecParams(

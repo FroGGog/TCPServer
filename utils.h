@@ -1,8 +1,7 @@
 #pragma once
+#include <string>
 
-#include "nlohmann/json.hpp"
-
-struct ServerData
+struct Config
 {
     std::string host;
 
