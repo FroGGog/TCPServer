@@ -16,6 +16,7 @@
 
 #include "db.h"
 #include "utils.h"
+#include "rate_limiter.h"
 
 #include "nlohmann/json.hpp"
 
@@ -24,6 +25,7 @@ using json = nlohmann::json;
 std::atomic<bool> running{true};
 std::atomic<int> active_clients{0};
 std::atomic<uint64_t> requests_handled{0};
+std::atomic<int> test_api_counter{0};
 static int g_server_socket = -1;
 
 std::chrono::time_point server_start_time = std::chrono::steady_clock::now();
@@ -151,7 +153,7 @@ void signal_handler(int)
     }
 }
 
-void handleUser(int accept_socket, ConnectionPool& pool)
+void handleUser(int accept_socket, ConnectionPool& pool, ClientRegistry& c_registry)
 {
     ClientCounterGuard guard{active_clients};
     constexpr size_t BUFFER_SIZE = 1024;
@@ -176,6 +178,31 @@ void handleUser(int accept_socket, ConnectionPool& pool)
                 ++requests_handled;
                 if(request["action"] == "save")
                 {
+                    std::string api_key = request.value("api_key", "");
+
+                    if(api_key.empty() || !c_registry.is_valid_key(api_key))
+                    {
+                        json response = {{"error", "invalid api_key"}};
+                        std::string response_str = response.dump();
+                        if(send(accept_socket, response_str.c_str(), response_str.size(), 0) < 0)
+                        {
+                            spdlog::error("Send failed: {}", accept_socket);                    
+                        }
+                        return;
+                    }
+                    
+                    if(c_registry.is_rate_limited(api_key))
+                    {
+                        json response = {{"error", "429 Too Many Requests"}};
+                        std::string response_str = response.dump();
+                        if(send(accept_socket, response_str.c_str(), response_str.size(), 0) < 0)
+                        {
+                            spdlog::error("Send failed: {}", accept_socket);                    
+                        }
+                        return;
+                    }
+                    c_registry.increment_request_count(api_key);
+
                     std::string value = request["value"].get<std::string>();
                     
                     auto conn_guard = ConnectionGuard{pool, pool.acquire()};
@@ -233,6 +260,20 @@ void handleUser(int accept_socket, ConnectionPool& pool)
                     spdlog::info("Send server stats info");
 
                 }
+                else if(request["action"] == "register")
+                {
+                    int api = test_api_counter.load();
+                    json response = {{"api_key", api}};
+                    std::string response_str = response.dump();
+                    if(send(accept_socket, response_str.c_str(), response_str.size(), 0) < 0)
+                    {
+                        spdlog::error("Send failed: {}", accept_socket);                    
+                        return;
+                    }
+                    c_registry.add_client(std::to_string(api));
+                    ++test_api_counter;
+                    spdlog::info("Registrated client with api_key: {}", api);
+                }
             }
             else
             {
@@ -265,7 +306,7 @@ void handleUser(int accept_socket, ConnectionPool& pool)
 }
 
 
-int startServer(ConnectionPool& pool)
+int startServer(ConnectionPool& pool, ClientRegistry& c_registry)
 {
     const char* host = CONFIG.host.c_str();
     int PORT = CONFIG.server_port;
@@ -332,7 +373,7 @@ int startServer(ConnectionPool& pool)
         }
         
         spdlog::info("Connected: {}", accept_socket);
-        std::thread j{handleUser, accept_socket, std::ref(pool)};
+        std::thread j{handleUser, accept_socket, std::ref(pool), std::ref(c_registry)};
 
         j.detach();
     }
@@ -389,8 +430,9 @@ int main()
     signal(SIGPIPE, SIG_IGN);
 
     ConnectionPool p_connections{CONFIG, 5};
+    ClientRegistry client_registry;
 
-    startServer(p_connections);
+    startServer(p_connections, client_registry);
 
     spdlog::info("Shutting down... {} active clients", active_clients.load());
     int wait_cycles = 0;
