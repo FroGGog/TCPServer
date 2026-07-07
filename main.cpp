@@ -23,7 +23,11 @@ using json = nlohmann::json;
 
 std::atomic<bool> running{true};
 std::atomic<int> active_clients{0};
+std::atomic<uint64_t> requests_handled{0};
 static int g_server_socket = -1;
+
+std::chrono::time_point server_start_time = std::chrono::steady_clock::now();
+
 
 Config CONFIG;
 
@@ -167,35 +171,67 @@ void handleUser(int accept_socket, ConnectionPool& pool)
         {
             json request = json::parse(buffer);
 
-            if(request.contains("action") && request["action"] == "save")
+            if(request.contains("action"))
             {
-                std::string value = request["value"].get<std::string>();
-                
-                auto conn_guard = ConnectionGuard{pool, pool.acquire()};
-                auto& connection = conn_guard.get();
+                ++requests_handled;
+                if(request["action"] == "save")
+                {
+                    std::string value = request["value"].get<std::string>();
+                    
+                    auto conn_guard = ConnectionGuard{pool, pool.acquire()};
+                    auto& connection = conn_guard.get();
 
-                if(auto id = connection.saveMessage(value.c_str()))
-                {
-                    json response = {{"id", *id}};
-                    std::string response_str = response.dump();
-                    if(send(accept_socket, response_str.c_str(), response_str.size(), 0) < 0)
-                    {                        
-                        spdlog::error("Send failed: {}", accept_socket);
-                        return;
+                    if(auto id = connection.saveMessage(value.c_str()))
+                    {
+                        json response = {{"id", *id}};
+                        std::string response_str = response.dump();
+                        if(send(accept_socket, response_str.c_str(), response_str.size(), 0) < 0)
+                        {                        
+                            spdlog::error("Send failed: {}", accept_socket);
+                            return;
+                        }
+                        spdlog::info("Saved message with id: {}", id.value());
                     }
-                    spdlog::info("Saved message with id: {}", id.value());
+                    else
+                    {
+                        json response = {{"error", "db_insert_failed"}};
+                        std::string response_str = response.dump();
+                        if(send(accept_socket, response_str.c_str(), response_str.size(), 0) < 0)
+                        {
+                            spdlog::error("Send failed: {}", accept_socket);                    
+                            return;
+                        }
+
+                        spdlog::error("Saving message failed");
+                    }
                 }
-                else
+                else if(request["action"] == "health")
                 {
-                    json response = {{"error", "db_insert_failed"}};
+                    auto end_time = std::chrono::steady_clock::now();
+
+                    auto server_upkeep_time = std::chrono::duration_cast<std::chrono::seconds>(end_time - server_start_time);
+                
+                    json response = {{"status", "ok"}, {"uptime", server_upkeep_time.count()}};
+
                     std::string response_str = response.dump();
                     if(send(accept_socket, response_str.c_str(), response_str.size(), 0) < 0)
                     {
                         spdlog::error("Send failed: {}", accept_socket);                    
                         return;
                     }
+                    spdlog::info("Send server status info");
+                }
+                else if(request["action"] == "stats")
+                {
+                    json response = {{"active_clinets", active_clients.load()}, {"requests_handled", requests_handled.load()}};
+                    std::string response_str = response.dump();
+                    if(send(accept_socket, response_str.c_str(), response_str.size(), 0) < 0)
+                    {
+                        spdlog::error("Send failed: {}", accept_socket);                    
+                        return;
+                    }
+                    spdlog::info("Send server stats info");
 
-                    spdlog::error("Saving message failed");
                 }
             }
             else
