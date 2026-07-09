@@ -94,3 +94,61 @@ std::optional<int64_t> PostgreConnection::saveMessage(const char* buffer)
     PQclear(res);
     return id;
 }
+
+void PostgreConnection::saveUser(const std::string& api_key)
+{
+    const char* param_values[1] = { api_key.c_str() };
+
+    PGresult* res = PQexecParams(
+        m_conn,
+        "INSERT INTO users (api_key, created_at, is_active, rate_limit) VALUES ($1, NOW(), TRUE, 100)",
+        1,
+        NULL,
+        param_values,
+        NULL,
+        NULL,
+        0
+    );
+
+    ExecStatusType status = PQresultStatus(res);
+
+    if(status != PGRES_COMMAND_OK)
+    {
+        logger->error("DB save message failure: {}", PQerrorMessage(m_conn));
+        PQclear(res);
+    }
+
+    PQclear(res);
+}
+
+std::vector<std::string> PostgreConnection::getAllAPIKeys()
+{
+    std::vector<std::string> result;
+
+    PGresult* res = PQexec(m_conn, "SELECT api_key FROM users WHERE is_active = TRUE");
+
+    if(PQresultStatus(res) != PGRES_TUPLES_OK)
+    {
+        logger->error("DB select users failure: {}", PQerrorMessage(m_conn));
+        PQclear(res);
+        return result;
+    }
+
+    int rows = PQntuples(res);
+
+    for(int i = 0; i < rows; ++i)
+    {
+        // PQgetvalue(res, row, column)
+        char* value = PQgetvalue(res, i, 0);
+        if(value != nullptr)
+        {
+            result.push_back(std::string(value));
+        }
+    }
+    
+    PQclear(res);
+    
+    logger->info("Loaded {} api keys from database", result.size());
+
+    return result;
+}

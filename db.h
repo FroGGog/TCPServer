@@ -7,6 +7,7 @@
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/rotating_file_sink.h>
 #include <iostream>
+#include <vector>
 
 class PostgreConnection
 {
@@ -23,7 +24,10 @@ public:
     PGconn* getConnection();
     
     std::optional<int64_t> saveMessage(const char* buffer);
-
+    
+    void saveUser(const std::string& api_key);
+    
+    std::vector<std::string> getAllAPIKeys();
 
 private:
     bool m_is_connected = false;

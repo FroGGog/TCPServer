@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <random>
 
 struct Config
 {
@@ -12,4 +13,6 @@ struct Config
 
     int server_port;
 };
+
+std::string generateRandomString(int lenght);
 

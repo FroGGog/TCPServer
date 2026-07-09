@@ -69,6 +69,15 @@ public:
             ++it->second.m_request_count;
         }
     }
+    
+    void load_users_data(PostgreConnection* connection)
+    {
+        std::lock_guard<std::mutex> lock(m_mtx);
+        for(auto& key : connection->getAllAPIKeys())
+        {
+            m_clients.emplace(key, ClientInfo{key});
+        }
+    }
 private:
     std::unordered_map<std::string, ClientInfo> m_clients;
     std::mutex m_mtx;

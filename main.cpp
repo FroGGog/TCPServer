@@ -183,7 +183,7 @@ void handleUser(int accept_socket, ConnectionPool& pool, ClientRegistry& c_regis
                     if(api_key.empty() || !c_registry.is_valid_key(api_key))
                     {
                         json response = {{"error", "invalid api_key"}};
-                        std::string response_str = response.dump();
+                        std::string response_str = response.dump() + '\n';
                         if(send(accept_socket, response_str.c_str(), response_str.size(), 0) < 0)
                         {
                             spdlog::error("Send failed: {}", accept_socket);                    
@@ -194,7 +194,7 @@ void handleUser(int accept_socket, ConnectionPool& pool, ClientRegistry& c_regis
                     if(c_registry.is_rate_limited(api_key))
                     {
                         json response = {{"error", "429 Too Many Requests"}};
-                        std::string response_str = response.dump();
+                        std::string response_str = response.dump() + '\n';
                         if(send(accept_socket, response_str.c_str(), response_str.size(), 0) < 0)
                         {
                             spdlog::error("Send failed: {}", accept_socket);                    
@@ -208,10 +208,11 @@ void handleUser(int accept_socket, ConnectionPool& pool, ClientRegistry& c_regis
                     auto conn_guard = ConnectionGuard{pool, pool.acquire()};
                     auto& connection = conn_guard.get();
 
+                    
                     if(auto id = connection.saveMessage(value.c_str()))
                     {
                         json response = {{"id", *id}};
-                        std::string response_str = response.dump();
+                        std::string response_str = response.dump() + '\n';
                         if(send(accept_socket, response_str.c_str(), response_str.size(), 0) < 0)
                         {                        
                             spdlog::error("Send failed: {}", accept_socket);
@@ -222,7 +223,7 @@ void handleUser(int accept_socket, ConnectionPool& pool, ClientRegistry& c_regis
                     else
                     {
                         json response = {{"error", "db_insert_failed"}};
-                        std::string response_str = response.dump();
+                        std::string response_str = response.dump() + '\n';
                         if(send(accept_socket, response_str.c_str(), response_str.size(), 0) < 0)
                         {
                             spdlog::error("Send failed: {}", accept_socket);                    
@@ -240,7 +241,7 @@ void handleUser(int accept_socket, ConnectionPool& pool, ClientRegistry& c_regis
                 
                     json response = {{"status", "ok"}, {"uptime", server_upkeep_time.count()}};
 
-                    std::string response_str = response.dump();
+                    std::string response_str = response.dump() + '\n';
                     if(send(accept_socket, response_str.c_str(), response_str.size(), 0) < 0)
                     {
                         spdlog::error("Send failed: {}", accept_socket);                    
@@ -251,7 +252,7 @@ void handleUser(int accept_socket, ConnectionPool& pool, ClientRegistry& c_regis
                 else if(request["action"] == "stats")
                 {
                     json response = {{"active_clinets", active_clients.load()}, {"requests_handled", requests_handled.load()}};
-                    std::string response_str = response.dump();
+                    std::string response_str = response.dump() + '\n';
                     if(send(accept_socket, response_str.c_str(), response_str.size(), 0) < 0)
                     {
                         spdlog::error("Send failed: {}", accept_socket);                    
@@ -262,23 +263,28 @@ void handleUser(int accept_socket, ConnectionPool& pool, ClientRegistry& c_regis
                 }
                 else if(request["action"] == "register")
                 {
-                    int api = test_api_counter.load();
-                    json response = {{"api_key", api}};
-                    std::string response_str = response.dump();
+                    auto conn_guard = ConnectionGuard{pool, pool.acquire()};
+                    auto& connection = conn_guard.get();
+
+                    std::string generated_api_key = generateRandomString(16);
+                    json response = {{"api_key", generated_api_key}};
+                    std::string response_str = response.dump() + '\n';
                     if(send(accept_socket, response_str.c_str(), response_str.size(), 0) < 0)
                     {
                         spdlog::error("Send failed: {}", accept_socket);                    
                         return;
                     }
-                    c_registry.add_client(std::to_string(api));
+                    connection.saveUser(generated_api_key);
+                    c_registry.add_client(generated_api_key);
+
                     ++test_api_counter;
-                    spdlog::info("Registrated client with api_key: {}", api);
+                    spdlog::info("Registrated client with api_key: {}", generated_api_key);
                 }
             }
             else
             {
                 json response = {{"error", "unknown_action"}};
-                std::string response_str = response.dump();                
+                std::string response_str = response.dump() + '\n';                
                 spdlog::error("Unknow action: {}", response_str);
 
                 if(send(accept_socket, response_str.c_str(), response_str.length(), 0) < 0)
@@ -294,7 +300,7 @@ void handleUser(int accept_socket, ConnectionPool& pool, ClientRegistry& c_regis
             spdlog::error("Json parse failure: {}", e.what());
 
             json response = {{"error", "invalid_json"}};
-            std::string response_str = response.dump();
+            std::string response_str = response.dump() + '\n';
             if(send(accept_socket, response_str.c_str(), response_str.length(), 0) < 0)
             {
                 spdlog::error("Send error response failed");
@@ -431,6 +437,11 @@ int main()
 
     ConnectionPool p_connections{CONFIG, 5};
     ClientRegistry client_registry;
+    
+    {
+        auto conn_guard = ConnectionGuard{p_connections, p_connections.acquire()};
+        client_registry.load_users_data(&conn_guard.get());
+    }
 
     startServer(p_connections, client_registry);
 
