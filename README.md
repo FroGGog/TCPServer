@@ -1,59 +1,118 @@
-# TCPServer: Echo Service with PostgreSQL
+# TCPServer
 
-Простой многопоточный TCP-echo сервер на C++ (POSIX sockets), сохраняющий входящие сообщения (получаемые в json формате) в PostgreSQL.
+Многопоточный TCP-сервис на C++ с JSON API, PostgreSQL хранилищем и Docker-упаковкой.
 
-## Требования
-- macOS / Linux
-- CMake >= 3.26
-- Clang / GCC с поддержкой C++17
-- PostgreSQL 15+ (локально или в Docker)
+## Возможности
+- JSON-протокол: `save`, `register`, `health`, `stats`
+- Аутентификация через API-ключи
+- Rate-limiting (100 запросов / 60 сек на ключ)
+- Пул соединений PostgreSQL (5 коннектов)
+- Graceful shutdown по SIGINT/SIGTERM
+- Ротация логов через `spdlog`
+- Контейнеризация через Docker Compose
+- Автоматическая инициализация БД
 
-## Автоматические зависимости
-Cmake автоматические подтягивает 
-- nlohmann/json
-- spdlog
+## Быстрый старт
 
-## Сборка
+### Требования
+- Docker и Docker Compose
+
+### Запуск
 ```bash
+git clone <https://github.com/FroGGog/TCPServer.git>
+cd TCPServer
+docker compose up --build
+```
+
+Сервер будет слушать порт `4124`.
+
+## Тестирование
+
+### Регистрация клиента
+```bash
+nc 127.0.0.1 4124
+{"action":"register"}
+# Ответ: {"api_key":"Ab3xxqwo213"}
+```
+
+### Сохранение сообщения
+```bash
+{"action":"save", "api_key":"Ab3xxqwo213", "value":"Hello from Docker!"}
+# Ответ: {"id":1}
+```
+
+### Health-check
+```bash
+{"action":"health"}
+# Ответ: {"status":"ok","uptime":42}
+```
+
+### Статистика
+```bash
+{"action":"stats"}
+# Ответ: {"active_clients":1,"requests_handled":5}
+```
+
+## Архитектура
+
+```
+┌─────────────┐      ┌──────────────┐      ┌─────────────┐
+│   Client    │─────▶│  TCP Server  │─────▶│ PostgreSQL  │
+│  (nc/curl)  │◀─────│  (C++ 17)    │◀─────│  (libpq)    │
+└─────────────┘      └──────────────┘      └─────────────┘
+                            │
+                            ▼
+                     ┌──────────────┐
+                     │  Connection  │
+                     │    Pool      │
+                     │              │
+                     └──────────────┘
+```
+
+### Структура проекта
+```
+TCPServer/
+├── main.cpp              # Точка входа, цикл accept()
+├── db.cpp/h              # PostgreConnection + пул
+├── utils.cpp/h           # Config, генератор ключей
+├── rate_limiter.h        # ClientRegistry + rate-limit
+├── CMakeLists.txt        # Сборка + FetchContent
+├── Dockerfile            # Multi-stage build
+├── docker-compose.yml    # Сервер + PostgreSQL
+├── init.sql              # Инициализация схемы БД
+├── config.json           # Конфигурация
+└── .github/workflows/    # CI-сборка
+```
+
+## Конфигурация ([config.json](config.json))
+
+```json
+{
+    "server_host": "0.0.0.0",
+    "db_host": "db",
+    "server_port": 4124,
+    "db_port": 5432,
+    "db_name": "TCPServer",
+    "user": "postgres",
+    "password": "123"
+}
+```
+
+## Локальная сборка (без Docker)
+
+```bash
+brew install libpq
 mkdir build && cd build
 cmake -DCMAKE_BUILD_TYPE=Release ..
 cmake --build .
-```
-
-## Настройка БД
-1. Создайте БД и пользователя (или используйте существующие).
-2. Обновите параметры подключения в [db.cpp](db.cpp) (строка conninfo).
-3. Выполните инициализацию таблицы:
-
-```SQL
-CREATE TABLE IF NOT EXISTS messages (
-    id SERIAL PRIMARY KEY,
-    content TEXT NOT NULL,
-    received_at TIMESTAMP DEFAULT NOW()
-);
-```
-
-## Запуск 
-```bash
 ./bin/TCPServer
 ```
 
-## Тестирование
-В другом терминале:
-```
-nc 127.0.0.1 4124
-# или 
-telnet 127.0.0.1 4124
-{"action" : "save", "value" : "Your text"}
-# Сервер вернёт: {"id" : id}
-```
-
-## Использование
-На данный момент сервер принимает только сообщения формата: 
-- {"action" : "save", "value" : "Your text"}
-
-Доступные "action":
-- save - принимает один аргумент "value" - текст сообщения std::string
-
-## Остановка
-Нажмите Ctrl+C. Сервер корректно закроет сокеты и соединение с БД.
+## Используемые технологии
+- **C++17**, POSIX sockets
+- **PostgreSQL 15** + libpq
+- **nlohmann/json** — JSON-парсинг
+- **spdlog** — логирование с ротацией
+- **CMake FetchContent** — управление зависимостями
+- **Docker Compose** — контейнеризация
+- **GitHub Actions** — CI/CD
