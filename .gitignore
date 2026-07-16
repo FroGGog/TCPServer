@@ -7,3 +7,4 @@
 .DS_Store
 *.sh
 /benchmark_results
+/logs

@@ -1,11 +1,12 @@
 #pragma once
 #include <string>
 #include <random>
+#include <chrono>
 
 struct Config
 {
-    std::string host;
-
+    std::string server_host;
+    std::string db_host; 
     std::string db_name;
     std::string db_username;
     std::string db_password;

@@ -59,6 +59,9 @@ find_package(PostgreSQL REQUIRED)
 set(JSON_BuildTests OFF CACHE INTERNAL "")
 set(SPDLOG_BUILD_TESTS OFF CACHE INTERNAL "")
 
+set(FETCHCONTENT_QUIET OFF) 
+set(FETCHCONTENT_UPDATES_DISCONNECTED ON)
+
 FetchContent_MakeAvailable(nlohmann_json spdlog)
 
 target_include_directories(${PROJECT_NAME} PRIVATE ${PostgreSQL_INCLUDE_DIRS})

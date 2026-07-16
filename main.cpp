@@ -42,7 +42,7 @@ public:
 
         for(size_t i = 0; i < pool_size; ++i)
         {
-            PostgreConnection p_connection {cfg.host, std::to_string(cfg.db_port), 
+            PostgreConnection p_connection {cfg.db_host, std::to_string(cfg.db_port), 
             cfg.db_name, cfg.db_username, cfg.db_password};
 
             if(!p_connection.isConnected())
@@ -314,28 +314,27 @@ void handleUser(int accept_socket, ConnectionPool& pool, ClientRegistry& c_regis
 
 int startServer(ConnectionPool& pool, ClientRegistry& c_registry)
 {
-    const char* host = CONFIG.host.c_str();
-    int PORT = CONFIG.server_port;
+    const char* host = CONFIG.server_host.c_str();
+    const char* port_str = std::to_string(CONFIG.server_port).c_str();
+
+    addrinfo hints = {}, *res = nullptr;
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+
+    if (getaddrinfo(host, port_str, &hints, &res) != 0) {
+        spdlog::error("Failed to resolve host: {}", host);
+        return 1;
+    }
 
     sockaddr_in server_param = {};
-    server_param.sin_family = AF_INET;
-    server_param.sin_port = htons(PORT);
-    int res = inet_pton(AF_INET, host, &server_param.sin_addr);
-    if(res == 0)
-    {
-        spdlog::error("Server invalid IP format {}", res);
-        return 1;
-    }
-    if(res < 0)
-    {
-        spdlog::error("Invalid inet_pton invalid argument {}", res);
-        return 1;
-    }
+    std::memcpy(&server_param, res->ai_addr, sizeof(server_param));
+    server_param.sin_port = htons(CONFIG.server_port); // Перестраховка
+
+    freeaddrinfo(res);
 
     g_server_socket = socket(server_param.sin_family, SOCK_STREAM, 0);
-    if(g_server_socket < 0)
-    {
-        spdlog::error("Socket creation failure: {}", g_server_socket);
+    if (g_server_socket < 0) {
+        spdlog::error("Socket creation failure");
         return 1;
     }
 
@@ -360,7 +359,7 @@ int startServer(ConnectionPool& pool, ClientRegistry& c_registry)
         return 1;
     }
 
-    spdlog::info("Started server on port {}", PORT);
+    spdlog::info("Started server on port {}", port_str);
 
     while(true)
     {
@@ -408,7 +407,7 @@ int main()
     try
     {
         std::fstream fs;
-        fs.open("bin/config.json", std::ios::in);
+        fs.open("config.json", std::ios::in);
         if(!fs.is_open())
         {
             spdlog::error("Failed to open config.json");
@@ -417,9 +416,9 @@ int main()
 
         json config = json::parse(fs);
 
-        CONFIG.host = config.value("host", "127.0.0.1");
+        CONFIG.server_host = config.value("server_host", "0.0.0.0");
+        CONFIG.db_host = config.value("db_host", "127.0.0.1");
         CONFIG.server_port = config.value("server_port", 4124);
-
         CONFIG.db_port = config.value("db_port", 5432);
         CONFIG.db_name = config.value("db_name", "TCPServer");
         CONFIG.db_username = config.value("user", "postgres");

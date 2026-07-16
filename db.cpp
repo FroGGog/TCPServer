@@ -73,7 +73,7 @@ std::optional<int64_t> PostgreConnection::saveMessage(const char* buffer)
 
     PGresult* res = PQexecParams(
         m_conn,
-        "INSERT INTO messages (content, recived_at) VALUES ($1, NOW()) RETURNING id",
+        "INSERT INTO messages (content, received_at) VALUES ($1, NOW()) RETURNING id",
         1,
         NULL,
         param_values,
